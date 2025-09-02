@@ -25,6 +25,7 @@ jobs:
     - name: Setup NuGet
       uses: NuGet/setup-nuget@v2
 
+
     # Cache les packages NuGet (optionnel, mais améliore la vitesse)
     - name: Cache NuGet
       uses: actions/cache@v4
@@ -39,7 +40,10 @@ jobs:
     # Restaure toutes les dépendances du fichier packages.config
     - name: Restore NuGet packages
       run: nuget restore .\UpSkope.sln
-
+      
+    - name: Préparer le dossier attendu par le post‑build
+      run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
+    
     # Compile le projet C++ IPCProxy (Release Win32)
     - name: Build IPCProxy
       run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
