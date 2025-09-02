@@ -38,13 +38,13 @@ jobs:
       - name: Guard MsBuildMajorVersion
         shell: pwsh
         run: |
-          @"
+          @'
           <Project>
             <PropertyGroup>
               <MsBuildMajorVersion Condition="'$(MsBuildMajorVersion)' == ''">17</MsBuildMajorVersion>
             </PropertyGroup>
           </Project>
-          "@ | Out-File -FilePath Directory.Build.props -Encoding utf8
+          '@ | Set-Content -Path Directory.Build.props -Encoding UTF8
 
       # Build Release/x64 avec toolset v143
       - name: Build solution (Release x64, v143)
