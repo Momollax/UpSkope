@@ -1,4 +1,4 @@
-name: Build UpSkope (Release x64)
+name: Build UpSkope (.NET + C++)
 
 on:
   push:
@@ -8,17 +8,34 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2022   # VS 2022 + MSBuild 17 + toolset v143
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        configuration: [Release]
+        platform: [x64]
+
+    env:
+      Solution_Name: UpSkope.sln
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # MSBuild 17 (VS2022) dans le PATH
+      # .NET SDK (utile pour les outils dotnet si besoin ; le projet C# est .NET Framework,
+      # mais avoir dotnet CLI dispo ne gêne pas)
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Ajoute MSBuild 17 (VS2022) au PATH
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # Cache NuGet (accélère les builds)
+      # Cache NuGet
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
@@ -30,11 +47,12 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-
 
+      # Restore NuGet (solution)
       - name: Restore NuGet
         shell: pwsh
-        run: nuget restore .\UpSkope.sln
+        run: nuget restore "$env:Solution_Name"
 
-      # Sécurise les cibles qui comparent MsBuildMajorVersion
+      # Évite les erreurs de comparaison numérique si MsBuildMajorVersion est vide dans certains targets
       - name: Guard MsBuildMajorVersion
         shell: pwsh
         run: |
@@ -46,27 +64,23 @@ jobs:
           </Project>
           '@ | Set-Content -Path Directory.Build.props -Encoding UTF8
 
-      # Build Release/x64 avec toolset v143
-      - name: Build solution (Release x64, v143)
+      # Build C# (.NET Framework) + C++ (v143) en Release/x64
+      - name: Build solution
         shell: pwsh
         run: |
-          $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
-          if (-not (Test-Path $msbuild)) { $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe" }
-          if (-not (Test-Path $msbuild)) { $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" }
-
-          & $msbuild .\UpSkope.sln /m `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
+          msbuild "$env:Solution_Name" /m `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=${{ matrix.platform }} `
             /p:PlatformToolset=v143 `
             /p:MsBuildMajorVersion=17
 
-      # Publie uniquement les binaires utiles (pas de .pdb ni vdproj)
-      - name: Upload artifacts
+      # Publie les binaires utiles (EXE/DLL). Adapter si dossiers différents.
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: upskope-Release-x64
+          name: UpSkope-${{ matrix.platform }}-${{ matrix.configuration }}
           path: |
-            UpSkope\bin\Release\**\UpSkope.exe
-            IPCProxy\x64\Release\**\*.dll
-            CustomAction\x64\Release\**\*.dll
+            UpSkope\bin\${{ matrix.configuration }}\**\UpSkope.exe
+            IPCProxy\${{ matrix.platform }}\${{ matrix.configuration }}\**\*.dll
+            CustomAction\${{ matrix.platform }}\${{ matrix.configuration }}\**\*.dll
           if-no-files-found: warn
