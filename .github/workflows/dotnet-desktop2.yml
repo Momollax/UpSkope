@@ -34,7 +34,6 @@ jobs:
         shell: pwsh
         run: nuget restore .\UpSkope.sln
 
-      # Evite les cibles qui comparent $(MsBuildMajorVersion) quand elle est vide
       - name: Guard MsBuildMajorVersion
         shell: pwsh
         run: |
@@ -46,16 +45,16 @@ jobs:
           </Project>
           '@ | Set-Content -Path Directory.Build.props -Encoding UTF8
 
-      # Build C# (Any CPU) - Release
+      # C# : AnyCPU (sans espace)
       - name: Build UpSkope (C# AnyCPU)
         shell: pwsh
         run: |
           msbuild .\UpSkope\UpSkope.csproj /m `
             /p:Configuration=Release `
-            /p:Platform="Any CPU" `
+            /p:Platform=AnyCPU `
             /p:MsBuildMajorVersion=17
 
-      # Build C++ Win32 (Release)
+      # C++ : Win32 (conforme au .sln)
       - name: Build IPCProxy (C++ Win32)
         shell: pwsh
         run: |
