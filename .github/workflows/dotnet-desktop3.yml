@@ -48,12 +48,13 @@ jobs:
     # (Supprime si tu corriges le PostBuild d'IPCProxy pour copier vers UpSkope\resources\)
     - name: Préparer le dossier attendu par le post-build
       run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
+   
+    - name: Build IPCProxy (C++ Release/x64)
+      run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=x64
 
-    - name: Build IPCProxy (C++)
-      run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+    - name: Build CustomAction (C++ Release/x64)
+      run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=x64
 
-    - name: Build CustomAction (C++)
-      run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
 
     - name: Build UpSkope (C#)
       run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
