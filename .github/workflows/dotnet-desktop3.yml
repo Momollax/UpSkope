@@ -45,8 +45,7 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore .\UpSkope.sln
 
-    # (À supprimer si vous corrigez le PostBuild dans IPCProxy.vcxproj
-    #  pour cibler UpSkope\resources\ au lieu de Upskope\resources\)
+    # (À supprimer si vous corrigez le PostBuild d'IPCProxy pour copier vers UpSkope\resources\)
     - name: Préparer le dossier attendu par le post-build
       run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
 
@@ -70,18 +69,26 @@ jobs:
           IPCProxy\Release\**\*.dll
           CustomAction\Release\**\*.dll
 
-    # --- Publication GitHub Releases (uniquement sur tag ou dispatch) ---
+    # ---------- Publication GitHub Releases (uniquement sur tag ou dispatch) ----------
+    - name: Déterminer le tag de release
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      shell: pwsh
+      run: |
+        $t = "${{ github.ref_name }}"
+        if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag }}") { $t = "${{ inputs.tag }}" }
+        "REL_TAG=$t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
     - name: Rassembler les fichiers pour la Release
       if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
       shell: pwsh
       run: |
-        $tag = "${{ github.ref_name }}"
-        if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag }}") { $tag = "${{ inputs.tag }}" }
         New-Item -ItemType Directory -Path dist -Force | Out-Null
-        Copy-Item UpSkope\bin\Release\UpSkope.exe dist\
-        Copy-Item IPCProxy\Release\*.dll dist\
-        Copy-Item CustomAction\Release\*.dll dist\
-        Compress-Archive -Path dist\* -DestinationPath ("dist\UpSkope-" + $tag + ".zip") -Force
+        Copy-Item UpSkope\bin\Release\UpSkope.exe dist\ -ErrorAction Stop
+        # Copie toutes les DLL compilées (sans supposer le chemin exact)
+        Get-ChildItem -Path IPCProxy, CustomAction -Recurse -Filter *.dll | ForEach-Object {
+          Copy-Item $_.FullName dist\ -Force
+        }
+        Compress-Archive -Path dist\* -DestinationPath ("dist\UpSkope-" + $env:REL_TAG + ".zip") -Force
 
     - name: Create GitHub Release & upload assets
       if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -89,10 +96,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.ref_name || inputs.tag }}
-        name: UpSkope ${{ github.ref_name || inputs.tag }}
+        tag_name: ${{ env.REL_TAG }}
+        name: UpSkope ${{ env.REL_TAG }}
         # IMPORTANT : chemins avec / pour cette action
         files: |
-          dist/UpSkope-${{ github.ref_name || inputs.tag }}.zip
+          dist/UpSkope-${{ env.REL_TAG }}.zip
           dist/UpSkope.exe
           dist/*.dll
