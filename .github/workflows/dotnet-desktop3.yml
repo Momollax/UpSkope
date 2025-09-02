@@ -1,0 +1,63 @@
+name: Build UpSkope
+
+# Déclencheur : sur chaque push et pull request
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: Checkout du dépôt
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # Ajoute MSBuild au PATH (Visual Studio 2022)
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      # vs-version non spécifiée : prend la version installée (VS 2022)
+
+    # Installe nuget.exe pour restaurer les packages
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+
+    # Cache les packages NuGet (optionnel, mais améliore la vitesse)
+    - name: Cache NuGet
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~\AppData\Local\NuGet\Cache
+          ~\AppData\Local\NuGet\v3-cache
+          ~\.nuget\packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
+        restore-keys: nuget-${{ runner.os }}-
+
+    # Restaure toutes les dépendances du fichier packages.config
+    - name: Restore NuGet packages
+      run: nuget restore .\UpSkope.sln
+
+    # Compile le projet C++ IPCProxy (Release Win32)
+    - name: Build IPCProxy
+      run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    # Compile le projet C++ CustomAction (Release Win32)
+    - name: Build CustomAction
+      run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    # Compile le projet C# UpSkope (Release AnyCPU)
+    - name: Build UpSkope
+      run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
+
+    # Publie l'exécutable et les DLL en artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: UpSkope-Release
+        path: |
+          UpSkope\bin\Release\**\UpSkope.exe
+          IPCProxy\Win32\Release\**\*.dll
+          CustomAction\Win32\Release\**\*.dll
