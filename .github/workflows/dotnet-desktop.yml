@@ -42,4 +42,55 @@ jobs:
         key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
         restore-keys: nuget-${{ runner.os }}-
 
-    - name: Restore Nu
+    - name: Restore NuGet packages
+      run: nuget restore .\UpSkope.sln
+
+    # (à supprimer si tu corrige le PostBuild d'IPCProxy)
+    - name: Préparer le dossier attendu par le post-build
+      run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
+
+    - name: Build IPCProxy
+      run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    - name: Build CustomAction
+      run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    - name: Build UpSkope
+      run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
+
+    # Artifacts CI (onglet Actions)
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: UpSkope-Release
+        path: |
+          UpSkope\bin\Release\**\UpSkope.exe
+          IPCProxy\Win32\Release\**\*.dll
+          CustomAction\Win32\Release\**\*.dll
+
+    # ---------- Publication GitHub Releases (seulement quand tag ou dispatch) ----------
+    - name: Rassembler les fichiers pour la Release
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag }}") { $tag = "${{ inputs.tag }}" }
+        New-Item -ItemType Directory -Path dist -Force | Out-Null
+        Copy-Item UpSkope\bin\Release\UpSkope.exe dist\
+        Copy-Item IPCProxy\Win32\Release\*.dll dist\
+        Copy-Item CustomAction\Win32\Release\*.dll dist\
+        Compress-Archive -Path dist\* -DestinationPath ("dist\UpSkope-" + $tag + ".zip") -Force
+
+    - name: Create GitHub Release & upload assets
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name || inputs.tag }}
+        name: UpSkope ${{ github.ref_name || inputs.tag }}
+        # IMPORTANT: chemins avec des slashs /
+        files: |
+          dist/UpSkope-${{ github.ref_name || inputs.tag }}.zip
+          dist/UpSkope.exe
+          dist/*.dll
