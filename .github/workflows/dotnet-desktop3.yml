@@ -1,15 +1,15 @@
 name: Build UpSkope
 
-# Droits nécessaires pour créer/mettre à jour une Release
 permissions:
   contents: write
 
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]           # ex: v1.0.0 → déclenche la publication Release
+    tags: ["v*"]           # build + publish si tag poussé
   pull_request:
-  # Optionnel : lancement manuel avec un tag saisi à la main
+  release:
+    types: [published]     # <-- build + upload quand tu publies une release via l’UI
   workflow_dispatch:
     inputs:
       tag:
@@ -21,7 +21,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Checkout du dépôt
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -45,20 +45,20 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore .\UpSkope.sln
 
-    # (À supprimer si vous corrigez le PostBuild d'IPCProxy pour copier vers UpSkope\resources\)
+    # (Supprime si tu corriges le PostBuild d'IPCProxy pour copier vers UpSkope\resources\)
     - name: Préparer le dossier attendu par le post-build
       run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
 
-    - name: Build IPCProxy (C++ Release/Win32)
+    - name: Build IPCProxy (C++)
       run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
 
-    - name: Build CustomAction (C++ Release/Win32)
+    - name: Build CustomAction (C++)
       run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
 
-    - name: Build UpSkope (C# Release/AnyCPU)
+    - name: Build UpSkope (C#)
       run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
 
-    # --- Artifacts CI (onglet Actions) ---
+    # Artifacts CI (onglet Actions) – utile pour debug / historique
     - name: Upload artifacts (exe + DLL)
       uses: actions/upload-artifact@v4
       with:
@@ -69,37 +69,38 @@ jobs:
           IPCProxy\Release\**\*.dll
           CustomAction\Release\**\*.dll
 
-    # ---------- Publication GitHub Releases (uniquement sur tag ou dispatch) ----------
+    # ---------- Préparer la Release ----------
     - name: Déterminer le tag de release
-      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      # on exécute pour tag push, release published, ou dispatch manuel
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       shell: pwsh
       run: |
         $t = "${{ github.ref_name }}"
+        if ("${{ github.event_name }}" -eq "release") { $t = "${{ github.event.release.tag_name }}" }
         if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag }}") { $t = "${{ inputs.tag }}" }
         "REL_TAG=$t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
     - name: Rassembler les fichiers pour la Release
-      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Path dist -Force | Out-Null
-        Copy-Item UpSkope\bin\Release\UpSkope.exe dist\ -ErrorAction Stop
-        # Copie toutes les DLL compilées (sans supposer le chemin exact)
+        Copy-Item "UpSkope\bin\Release\UpSkope.exe" dist\ -ErrorAction Stop
+        # récupère les DLL C++ sans supposer le sous-dossier
         Get-ChildItem -Path IPCProxy, CustomAction -Recurse -Filter *.dll | ForEach-Object {
           Copy-Item $_.FullName dist\ -Force
         }
         Compress-Archive -Path dist\* -DestinationPath ("dist\UpSkope-" + $env:REL_TAG + ".zip") -Force
 
-    - name: Create GitHub Release & upload assets
-      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    - name: Create/Update GitHub Release & upload assets
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ env.REL_TAG }}
+        tag_name: ${{ env.REL_TAG }}             # si la release existe déjà (UI), l’action l’update
         name: UpSkope ${{ env.REL_TAG }}
-        # IMPORTANT : chemins avec / pour cette action
-        files: |
+        files: |                                  # chemins POSIX exigés par l’action
           dist/UpSkope-${{ env.REL_TAG }}.zip
           dist/UpSkope.exe
           dist/*.dll
