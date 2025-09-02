@@ -1,10 +1,20 @@
 name: Build UpSkope
 
+# Droits nécessaires pour créer/mettre à jour une Release
+permissions:
+  contents: write
+
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]          # ← pour déclencher une Release sur tag
+    tags: ["v*"]           # ex: v1.0.0 → déclenche la publication Release
   pull_request:
+  # Optionnel : lancement manuel avec un tag saisi à la main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à publier (ex: v1.0.0)"
+        required: false
 
 jobs:
   build:
@@ -16,7 +26,7 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Setup MSBuild
+    - name: Setup MSBuild (VS2022)
       uses: microsoft/setup-msbuild@v2
 
     - name: Setup NuGet
@@ -35,49 +45,54 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore .\UpSkope.sln
 
-    # (à supprimer si tu corriges le PostBuild dans IPCProxy.vcxproj)
+    # (À supprimer si vous corrigez le PostBuild dans IPCProxy.vcxproj
+    #  pour cibler UpSkope\resources\ au lieu de Upskope\resources\)
     - name: Préparer le dossier attendu par le post-build
       run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
 
-    - name: Build IPCProxy
+    - name: Build IPCProxy (C++ Release/Win32)
       run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
 
-    - name: Build CustomAction
+    - name: Build CustomAction (C++ Release/Win32)
       run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
 
-    - name: Build UpSkope
+    - name: Build UpSkope (C# Release/AnyCPU)
       run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
 
-    # Artifacts CI (onglet Actions)
-    - name: Upload artifacts
+    # --- Artifacts CI (onglet Actions) ---
+    - name: Upload artifacts (exe + DLL)
       uses: actions/upload-artifact@v4
       with:
         name: UpSkope-Release
+        if-no-files-found: error
         path: |
           UpSkope\bin\Release\**\UpSkope.exe
-          IPCProxy\Win32\Release\**\*.dll
-          CustomAction\Win32\Release\**\*.dll
+          IPCProxy\Release\**\*.dll
+          CustomAction\Release\**\*.dll
 
-    # --- Publication dans GitHub Releases (seulement sur tag) ---
+    # --- Publication GitHub Releases (uniquement sur tag ou dispatch) ---
     - name: Rassembler les fichiers pour la Release
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Path dist -Force
+        $tag = "${{ github.ref_name }}"
+        if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag }}") { $tag = "${{ inputs.tag }}" }
+        New-Item -ItemType Directory -Path dist -Force | Out-Null
         Copy-Item UpSkope\bin\Release\UpSkope.exe dist\
-        Copy-Item IPCProxy\Win32\Release\*.dll dist\
-        Copy-Item CustomAction\Win32\Release\*.dll dist\
-        Compress-Archive -Path dist\* -DestinationPath dist\UpSkope-${{ github.ref_name }}.zip -Force
+        Copy-Item IPCProxy\Release\*.dll dist\
+        Copy-Item CustomAction\Release\*.dll dist\
+        Compress-Archive -Path dist\* -DestinationPath ("dist\UpSkope-" + $tag + ".zip") -Force
 
     - name: Create GitHub Release & upload assets
-      if: startsWith(github.ref, 'refs/tags/')
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        name: UpSkope ${{ github.ref_name }}
-        # IMPORTANT: chemins avec des slashs '/' (pas '\') pour cette action
+        tag_name: ${{ github.ref_name || inputs.tag }}
+        name: UpSkope ${{ github.ref_name || inputs.tag }}
+        # IMPORTANT : chemins avec / pour cette action
         files: |
-          dist/UpSkope-${{ github.ref_name }}.zip
+          dist/UpSkope-${{ github.ref_name || inputs.tag }}.zip
           dist/UpSkope.exe
           dist/*.dll
