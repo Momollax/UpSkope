@@ -1,0 +1,70 @@
+name: Build UpSkope
+
+on:
+  push:
+    branches: [ "**" ]
+    tags:     [ "v*" ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest   # Hosted runner has VS2022 & v143 toolset
+    strategy:
+      matrix:
+        configuration: [Release]
+        platform: [x64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Optional: use MSVC dev environment (makes CL/link available in PATH)
+      - name: Setup MSVC (VS2022)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+          toolset: 14.3
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\NuGet\Cache
+            ~\AppData\Local\NuGet\v3-cache
+            ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore NuGet
+        shell: pwsh
+        run: |
+          nuget restore .\UpSkope.sln
+
+      # Build with MSBuild 17 (VS2022). We also pass MsBuildMajorVersion=17 to avoid
+      # any numeric comparison issues in custom targets on some environments.
+      - name: Build solution (MSBuild 17)
+        shell: pwsh
+        run: |
+          $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
+          if (-not (Test-Path $msbuild)) {
+            $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
+          }
+          if (-not (Test-Path $msbuild)) {
+            $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+          }
+          & $msbuild .\UpSkope.sln /m `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=${{ matrix.platform }} `
+            /p:MsBuildMajorVersion=17 `
+            /p:PlatformToolset=v143
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: UpSkope-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: |
+            UpSkope\bin\${{ matrix.configuration }}\**\UpSkope.exe
+            IPCProxy\${{ matrix.platform }}\${{ matrix.configuration }}\**\*.dll
+            CustomAction\${{ matrix.platform }}\${{ matrix.configuration }}\**\*.dll
+          if-no-files-found: warn
