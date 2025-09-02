@@ -1,0 +1,83 @@
+name: Build UpSkope
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]          # ← pour déclencher une Release sur tag
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: Checkout du dépôt
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+
+    - name: Cache NuGet
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~\AppData\Local\NuGet\Cache
+          ~\AppData\Local\NuGet\v3-cache
+          ~\.nuget\packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
+        restore-keys: nuget-${{ runner.os }}-
+
+    - name: Restore NuGet packages
+      run: nuget restore .\UpSkope.sln
+
+    # (à supprimer si tu corriges le PostBuild dans IPCProxy.vcxproj)
+    - name: Préparer le dossier attendu par le post-build
+      run: New-Item -ItemType Directory -Path "IPCProxy\Upskope\resources" -Force
+
+    - name: Build IPCProxy
+      run: msbuild .\IPCProxy\IPCProxy.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    - name: Build CustomAction
+      run: msbuild .\CustomAction\CustomAction.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+
+    - name: Build UpSkope
+      run: msbuild .\UpSkope\UpSkope.csproj /m /p:Configuration=Release /p:Platform=AnyCPU
+
+    # Artifacts CI (onglet Actions)
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: UpSkope-Release
+        path: |
+          UpSkope\bin\Release\**\UpSkope.exe
+          IPCProxy\Win32\Release\**\*.dll
+          CustomAction\Win32\Release\**\*.dll
+
+    # --- Publication dans GitHub Releases (seulement sur tag) ---
+    - name: Rassembler les fichiers pour la Release
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Path dist -Force
+        Copy-Item UpSkope\bin\Release\UpSkope.exe dist\
+        Copy-Item IPCProxy\Win32\Release\*.dll dist\
+        Copy-Item CustomAction\Win32\Release\*.dll dist\
+        Compress-Archive -Path dist\* -DestinationPath dist\UpSkope-${{ github.ref_name }}.zip -Force
+
+    - name: Create GitHub Release & upload assets
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        name: UpSkope ${{ github.ref_name }}
+        # IMPORTANT: chemins avec des slashs '/' (pas '\') pour cette action
+        files: |
+          dist/UpSkope-${{ github.ref_name }}.zip
+          dist/UpSkope.exe
+          dist/*.dll
