@@ -1,4 +1,4 @@
-name: Build UpSkope (.NET + C++)
+name: Build UpSkope (Release Win32/AnyCPU)
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: nuget restore .\UpSkope.sln
 
-      # Empêche l’interprétation PowerShell dans le props + évite les targets qui comparent MsBuildMajorVersion vide
+      # Evite les cibles qui comparent $(MsBuildMajorVersion) quand elle est vide
       - name: Guard MsBuildMajorVersion
         shell: pwsh
         run: |
@@ -46,8 +46,8 @@ jobs:
           </Project>
           '@ | Set-Content -Path Directory.Build.props -Encoding UTF8
 
-      # Build C# (souvent Any CPU)
-      - name: Build UpSkope (C#)
+      # Build C# (Any CPU) - Release
+      - name: Build UpSkope (C# AnyCPU)
         shell: pwsh
         run: |
           msbuild .\UpSkope\UpSkope.csproj /m `
@@ -55,31 +55,31 @@ jobs:
             /p:Platform="Any CPU" `
             /p:MsBuildMajorVersion=17
 
-      # Build C++ (x64). Si ton repo est en Win32, remplace Platform=x64 par Platform=Win32
-      - name: Build IPCProxy (C++)
+      # Build C++ Win32 (Release)
+      - name: Build IPCProxy (C++ Win32)
         shell: pwsh
         run: |
           msbuild .\IPCProxy\IPCProxy.vcxproj /m `
             /p:Configuration=Release `
-            /p:Platform=x64 `
+            /p:Platform=Win32 `
             /p:PlatformToolset=v143 `
             /p:MsBuildMajorVersion=17
 
-      - name: Build CustomAction (C++)
+      - name: Build CustomAction (C++ Win32)
         shell: pwsh
         run: |
           msbuild .\CustomAction\CustomAction.vcxproj /m `
             /p:Configuration=Release `
-            /p:Platform=x64 `
+            /p:Platform=Win32 `
             /p:PlatformToolset=v143 `
             /p:MsBuildMajorVersion=17
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: UpSkope-Release
+          name: UpSkope-Release-Win32
           path: |
             UpSkope\bin\Release\**\UpSkope.exe
-            IPCProxy\x64\Release\**\*.dll
-            CustomAction\x64\Release\**\*.dll
+            IPCProxy\Win32\Release\**\*.dll
+            CustomAction\Win32\Release\**\*.dll
           if-no-files-found: warn
