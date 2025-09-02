@@ -1,0 +1,72 @@
+name: Build UpSkope (Release x64)
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022   # VS 2022 + MSBuild 17 + toolset v143
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # MSBuild 17 (VS2022) dans le PATH
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # Cache NuGet (accélère les builds)
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\NuGet\Cache
+            ~\AppData\Local\NuGet\v3-cache
+            ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore NuGet
+        shell: pwsh
+        run: nuget restore .\UpSkope.sln
+
+      # Sécurise les cibles qui comparent MsBuildMajorVersion
+      - name: Guard MsBuildMajorVersion
+        shell: pwsh
+        run: |
+          @"
+          <Project>
+            <PropertyGroup>
+              <MsBuildMajorVersion Condition="'$(MsBuildMajorVersion)' == ''">17</MsBuildMajorVersion>
+            </PropertyGroup>
+          </Project>
+          "@ | Out-File -FilePath Directory.Build.props -Encoding utf8
+
+      # Build Release/x64 avec toolset v143
+      - name: Build solution (Release x64, v143)
+        shell: pwsh
+        run: |
+          $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+          if (-not (Test-Path $msbuild)) { $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe" }
+          if (-not (Test-Path $msbuild)) { $msbuild = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" }
+
+          & $msbuild .\UpSkope.sln /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PlatformToolset=v143 `
+            /p:MsBuildMajorVersion=17
+
+      # Publie uniquement les binaires utiles (pas de .pdb ni vdproj)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: upskope-Release-x64
+          path: |
+            UpSkope\bin\Release\**\UpSkope.exe
+            IPCProxy\x64\Release\**\*.dll
+            CustomAction\x64\Release\**\*.dll
+          if-no-files-found: warn
