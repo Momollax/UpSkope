@@ -1,0 +1,209 @@
+name: Build UpSkope (Release x64)
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build-x64:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup MSBuild (VS2022)
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\NuGet\Cache
+            ~\AppData\Local\NuGet\v3-cache
+            ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore NuGet
+        shell: pwsh
+        run: nuget restore .\UpSkope.sln
+
+      - name: Guard MsBuildMajorVersion
+        shell: pwsh
+        run: |
+          @'
+          <Project>
+            <PropertyGroup>
+              <MsBuildMajorVersion Condition="'$(MsBuildMajorVersion)' == ''">17</MsBuildMajorVersion>
+            </PropertyGroup>
+          </Project>
+          '@ | Set-Content -Path Directory.Build.props -Encoding UTF8
+
+      # --- PATCH SOLUTION & PROJECTS TO ADD x64 CONFIGS ---
+      - name: Patch solution & projects for x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Paths
+          $sln = "UpSkope.sln"
+          $csproj = "UpSkope\UpSkope.csproj"
+          $vcx = @("IPCProxy\IPCProxy.vcxproj","CustomAction\CustomAction.vcxproj")
+
+          # GUIDs from your .sln
+          $GUID_UpSkope     = "{34931C7E-5395-4E12-80F0-0BB31801C8AB}"
+          $GUID_IPCProxy    = "{D46F0B6B-2D10-4497-8CBE-13CA9A713A1D}"
+          $GUID_CustomAction= "{E0CB261E-C5C1-4345-9993-69DCD359797D}"
+
+          # 1) Patch .sln: add SolutionConfigurationPlatforms x64 + ProjectConfigurationPlatforms mappings
+          $slnText = Get-Content $sln -Raw
+
+          if ($slnText -notmatch "Release\|x64") {
+            $slnText = $slnText -replace "(GlobalSection\(SolutionConfigurationPlatforms\) = preSolution\s*[\s\S]*?EndGlobalSection)",
+            {
+              param($m)
+              $block = $m.Value
+              if ($block -notmatch "Debug\|x64")   { $block = $block -replace "EndGlobalSection","`t`tDebug|x64 = Debug|x64`r`n`t`tRelease|x64 = Release|x64`r`nEndGlobalSection" }
+              $block
+            }
+            # Project mappings
+            $projMap = @"
+		$GUID_UpSkope.Debug|x64.ActiveCfg = Debug|Any CPU
+		$GUID_UpSkope.Debug|x64.Build.0   = Debug|Any CPU
+		$GUID_UpSkope.Release|x64.ActiveCfg = Release|Any CPU
+		$GUID_UpSkope.Release|x64.Build.0   = Release|Any CPU
+		$GUID_IPCProxy.Debug|x64.ActiveCfg = Debug|x64
+		$GUID_IPCProxy.Debug|x64.Build.0   = Debug|x64
+		$GUID_IPCProxy.Release|x64.ActiveCfg = Release|x64
+		$GUID_IPCProxy.Release|x64.Build.0   = Release|x64
+		$GUID_CustomAction.Debug|x64.ActiveCfg = Debug|x64
+		$GUID_CustomAction.Debug|x64.Build.0   = Debug|x64
+		$GUID_CustomAction.Release|x64.ActiveCfg = Release|x64
+		$GUID_CustomAction.Release|x64.Build.0   = Release|x64
+"@
+            $slnText = $slnText -replace "(GlobalSection\(ProjectConfigurationPlatforms\) = postSolution\s*[\s\S]*?EndGlobalSection)",
+            {
+              param($m)
+              $block = $m.Value
+              if ($block -notmatch [regex]::Escape("$GUID_IPCProxy.Release|x64.ActiveCfg")) {
+                $block = $block -replace "EndGlobalSection", ($projMap + "EndGlobalSection")
+              }
+              $block
+            }
+            Set-Content $sln -Value $slnText -Encoding UTF8
+          }
+
+          # 2) Patch C# csproj: add Debug|x64 and Release|x64 property groups
+          $cstext = Get-Content $csproj -Raw
+          if ($cstext -notmatch "Release\|x64") {
+            $releaseAny = @"
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+"@
+            $debugAny = @"
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <PlatformTarget>x64</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+"@
+            # Insérer juste avant la dernière balise </Project>
+            $cstext = $cstext -replace "</Project>", ($releaseAny + $debugAny + "</Project>")
+            Set-Content $csproj -Value $cstext -Encoding UTF8
+          }
+
+          # 3) Patch C++ vcxproj: clone Win32 -> x64 for Debug/Release (ProjectConfigurations + ItemDefinitionGroup)
+          foreach ($p in $vcx) {
+            [xml]$xml = Get-Content $p
+
+            # Ensure ProjectConfigurations (x64) exist
+            $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+            $ns.AddNamespace("msb", "http://schemas.microsoft.com/developer/msbuild/2003")
+
+            $projConfs = $xml.Project.ItemGroup | Where-Object { $_.Label -eq "ProjectConfigurations" }
+            if (-not $projConfs) {
+              $projConfs = $xml.CreateElement("ItemGroup", $ns.LookupNamespace("msb"))
+              $projConfs.SetAttribute("Label","ProjectConfigurations")
+              $xml.Project.AppendChild($projConfs) | Out-Null
+            }
+
+            function AddProjCfg($conf,$plat) {
+              param($conf,$plat)
+              if ($projConfs.ProjectConfiguration | Where-Object { $_.Include -eq "$conf|$plat" }) { return }
+              $pc = $xml.CreateElement("ProjectConfiguration", $ns.LookupNamespace("msb"))
+              $pc.SetAttribute("Include","$conf|$plat")
+              $n1 = $xml.CreateElement("Configuration", $ns.LookupNamespace("msb"))
+              $n1.InnerText = $conf
+              $n2 = $xml.CreateElement("Platform", $ns.LookupNamespace("msb"))
+              $n2.InnerText = $plat
+              $pc.AppendChild($n1) | Out-Null
+              $pc.AppendChild($n2) | Out-Null
+              $projConfs.AppendChild($pc) | Out-Null
+            }
+            AddProjCfg "Debug" "x64"
+            AddProjCfg "Release" "x64"
+
+            # Duplicate ItemDefinitionGroup/PropertyGroup for x64 from Win32
+            $ids = $xml.Project.ItemDefinitionGroup | Where-Object { $_.Condition -like "*|Win32'" }
+            foreach ($node in $ids) {
+              $new = $node.Clone()
+              $new.SetAttribute("Condition", $node.Condition -replace "\|Win32'","|x64'")
+              $xml.Project.InsertAfter($new,$node) | Out-Null
+            }
+            $pgs = $xml.Project.PropertyGroup | Where-Object { $_.Condition -like "*|Win32'" }
+            foreach ($node in $pgs) {
+              $new = $node.Clone()
+              $new.SetAttribute("Condition", $node.Condition -replace "\|Win32'","|x64'")
+              $xml.Project.InsertAfter($new,$node) | Out-Null
+            }
+
+            # Ensure PlatformToolset v143 is present for x64
+            foreach ($idg in $xml.Project.ItemDefinitionGroup) {
+              if ($idg.ClCompile -and -not $idg.ClCompile.PlatformToolset) {
+                $pt = $xml.CreateElement("PlatformToolset", $ns.LookupNamespace("msb"))
+                $pt.InnerText = "v143"
+                $idg.ClCompile.AppendChild($pt) | Out-Null
+              }
+            }
+
+            $xml.Save($p)
+          }
+
+      # --- BUILD SOLUTION AS x64 ---
+      - name: Build solution (Release|x64)
+        shell: pwsh
+        run: |
+          msbuild .\UpSkope.sln /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PlatformToolset=v143 `
+            /p:MsBuildMajorVersion=17
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: UpSkope-Release-x64
+          path: |
+            UpSkope\bin\x64\Release\**\UpSkope.exe
+            IPCProxy\x64\Release\**\*.dll
+            CustomAction\x64\Release\**\*.dll
+          if-no-files-found: warn
